@@ -1,0 +1,16 @@
+{
+	"folders":
+	[
+		{
+			"path": "."
+		}
+	],
+	"build_systems":
+	[
+	{
+		"name": "coffeescript-compile",
+		"cmd": ["coffee", "-c", "application.coffee"],
+		"working_dir": "${project_path}/scripts"
+	}
+	]
+}

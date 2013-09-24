@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <!--
+    EZ-ICU
+    6.831, Spring 2013
+    GR4
+    Kamran Khan, Robin Deits, Franck Dernoncourt, Mohammad Ghassemi
+  -->
+  <head>
+    <meta charset="utf-8">
+    <title>EZ-ICU (6.831 GR4)</title>
+    <meta name="viewport" content="width=device-width">
+
+    <script type="text/javascript" src="http://use.typekit.net/lrx4grx.js"></script>
+    <script type="text/javascript">try{Typekit.load();}catch(e){}</script>
+
+    <link rel="stylesheet" href="styles/application.css">
+    <script src="scripts/libraries/moment.js"></script>
+    <script src="scripts/libraries/jquery.js"></script>
+    <script src="scripts/libraries/jquery.ui.js"></script>
+    <script src="scripts/libraries/jquery.ui.timepicker.js"></script>
+    <script src="scripts/libraries/underscore.js"></script>
+    <script src="scripts/libraries/backbone.js"></script>
+    <script src="scripts/libraries/backbone.relational.js"></script>
+    <script src="scripts/libraries/backbone.localStorage.js"></script>
+  </head>
+  <body>
+    <div id="flash-message">That feature isn't implemented yet!</div>
+    <header>
+      <h1 id="logo">EZ-ICU</h1>
+      <span class="subtitle">Medication management made easy.</span>
+      <div id="user-name-header">
+      </div>
+    </header>
+    <section id="patient-list">
+      <div id="list-controls">
+        <ul id="sorting-options">
+          <li><a href="#" id="sort-by-name" class="active">Sort by name</a></li>
+          <li><a href="#" id="sort-by-bed">Sort by bed</a></li>
+          <li><a href="#" id="sort-by-urgency">Sort by next dose</a></li>
+        </ul>
+        <span id="list-information">
+          <span id="number-of-patients">
+            <i class="icon-user"></i> <span class="count">4</span> patients
+          </span>
+          <a href="#" id="add-patient" class="button not-implemented"><i class="icon-plus"></i> add a patient</a>
+        </span>
+      </div>
+      <ul id="patients"></ul>
+    </section>
+    <section id="information">
+      <div id="document-a"></div><div id="document-b"></div>
+      <div id="document">
+        <div id="patient-document"></div>
+        <div id="empty">
+          <span id="no-patient-selected">
+            <strong>Select a patient</strong> and his or her medical background will appear here
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <script type="text/html" id="user-name-header-template">
+      <% _.each(allUsers, function (user) { %>
+          <span> <a href="#" class="account <% if (user === activeUser) {print('active');} %>" user_id="<%= user.get('user_id')%>">
+          <%= user.get('title') + ' ' + user.get('name') %>
+          </a></span>
+      <% }); %>
+    </script>
+
+    <script type="text/html" id="patient-listing-template">
+      <div class="portrait">
+        <img src="images/patients/<%= patient.get('portraitFilename') %>" alt="" />
+      </div>
+      <h2 class="name"><strong><%= patient.lastName() %></strong>, <%= patient.firstName() %></h2>
+      <span class="bed">
+        Bed <span class="bed-number"><%= patient.get('bed') %></span>
+      </span>
+      <span class="status">
+        Next dosage
+        <em>
+          <%
+            var nextDose = patient.nextDose();
+            if (nextDose !== null) {
+              var nextTime = nextDose.get('scheduledTime');
+              if (nextTime < moment()) 
+                print(nextTime.fromNow(true) + ' overdue');
+              else
+                print(patient.nextDose().get('scheduledTime').fromNow());
+            } else {
+              print('none');
+            }
+          %>
+        </em>
+        <span class="light <%= patient.status() %>"><%= patient.status() %></span>
+      </span>
+    </script>
+
+    <script type="text/html" id="administration-list-template">
+      <% if (patient.mostRecentDoseGiven() !== null) { %>
+        <% dose = patient.mostRecentDoseGiven() %>
+        <li <% if (dose.get('givenTime') !== null) print('class="done"') %>>
+          <h4><%= dose.get('prescription').get('medication') %></h4>
+          <span class="additional"><%= dose.get('prescription').get('dosage') %>, given <%= dose.get('givenTime').fromNow() %></span>
+        </li>
+      <% } %>
+
+      <% if (patient.nextDose() !== null) { %>
+        <% dose = patient.nextDose() %>
+        <li <% if (dose.get('givenTime') !== null) print('class="done"') %>>
+          <h4><%= dose.get('prescription').get('medication') %></h4>
+          <span class="additional"><%= dose.get('prescription').get('dosage') %>, 
+          <% if (dose.get('givenTime') !== null)
+              print('given ' + dose.get('givenTime').fromNow());
+            else
+              print('due ' + dose.get('scheduledTime').fromNow()); %></span>
+        </li>
+      <% } %>
+
+      <% if (patient.numUpcomingDoses() > 1) { %>
+        <li class="stat">
+          <%= patient.numUpcomingDoses() - 1 %>
+          more dose<% if (patient.numUpcomingDoses() !== 2) print('s') %>
+        </li>
+      <% } %>
+    </script>
+
+    <script type="text/html" id="prescriptions-list-template">
+      <% _.each(_.filter(patient.get('prescriptions'), function (prescription) {return prescription.get('deleteTime') === null;}), 
+                function (prescription) { %>
+        <li>
+          <h4><%= prescription.get('medication') %> <em><%= prescription.get('dosage') %></em></h4>
+          <span class="additional">every <%= prescription.get('interval').asHours() %> hours</span>
+        </li>
+      <% }) %>
+    </script>
+
+    <script type="text/html" id="prescriptions-table-template">
+      <% _.each(patient.get('prescriptions'), function (prescription) { %>
+        <tr <% if (prescription.get('deleteTime') !== null) print('class="done"') %> >
+          <td><%= prescription.get('medication') %>
+          <% if (prescription.get('allergyWarning')) { %>
+            <span class="allergy-warning">(allergy)<span>
+          <% } else if (prescription.get('allergyAlert')) { %>
+            <span class="allergy-alert">(allergy)<span>
+          <% } %>
+          </td>
+          <td><%= prescription.get('dosage') %></td>
+          <td>every <%= prescription.get('interval').asHours() %> hours</td>
+          <td><%= prescription.get('startTime').fromNow() %></td>
+          <td><%= prescription.get('endTime').fromNow() %></td>
+          <td><% if (prescription.get('deleteTime') !== null) print('Deleted ' + prescription.get('deleteTime').fromNow()); %></td>
+          <td>
+          <% if (isDoctor) { %>
+              <a href="#" class="remove remove-existing"></a>
+            <span class="undo">
+              <a href="#" class="undo-link">Undo</a>
+            </span>
+            <% } %>
+          </td>
+        </tr>
+      <% }) %>
+    </script>
+
+    <script type="text/html" id="list-item-template">
+      <div class="listing"></div>
+      <div class="medication">
+        <ul class="medication-tabs">
+          <li><a href="#" data-tab="overview">Overview</a></li>
+          <li><a href="#" data-tab="prescription">Prescriptions</a></li>
+          <li><a href="#" data-tab="administration">Administration</a></li>
+        </ul>
+        <div class="medication-content">
+          <div class="overview">
+            <div class="vitals panel">
+              <h3>Vitals</h3>
+
+              <h4>Blood pressure</h4>
+              <span class="numerator">140</span>
+              <span class="over">/</span>
+              <span class="denominator">90</span>
+
+              <h4>Pulse</h4>
+              <span class="number">84</span>
+              <span class="label">bpm</span>
+            </div>
+            <div class="prescriptions panel">
+              <h3>Prescriptions</h3>
+              <ul class="prescriptions-list"></ul>
+            </div>
+            <div class="administration panel">
+              <h3>Administration</h3>
+              <ol class="administration-list"></ol>
+            </div>
+          </div>
+          <div class="prescription">
+            <table class="prescriptions">
+              <thead>
+                <tr>
+                  <th>Medication</th>
+                  <th>Dosage</th>
+                  <th>Frequency</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th></th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="new-template new">
+                  <td>
+                    <input class="medication-input input" type="text" placeholder="Medication" />
+                  </td>
+                  <td>
+                    <input class="dosage-input input" type="text" placeholder="Dosage" />
+                  </td>
+                  <td>
+                    <select class="frequency-input select-input">
+                      <option value="1">Every hour</option>
+                      <option value="2">Every 2 hours</option>
+                      <option value="3">Every 3 hours</option>
+                      <option value="4">Every 4 hours</option>
+                      <option value="6">Every 6 hours</option>
+                      <option value="12">Every 12 hours</option>
+                      <option value="24">Every 24 hours</option>
+                    </select>
+                  </td>
+                  <td>
+                    <div class="start-input input">
+                      <input type="text" placeholder="Start" class="date-time-picker-input" />
+                  </td>
+                  <td>
+                    <div class="end-input input">
+                      <input type="text" placeholder="End" class="date-time-picker-input" />
+                    </div>
+                  </td>
+                  <td>
+                    <a href="#" class="ok add-new"></a>
+                    <a href="#" class="remove remove-new"></a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="add-prescription-button">
+            </div>
+          </div>
+          <div class="administration">
+            <table class="doses">
+              <thead>
+                <tr>
+                  <th>Medication</th>
+                  <th>Dosage</th>
+                  <th>Scheduled Time</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </script>
+
+    <script type="text/html" id="add-prescription-button-template">
+      <% if (isDoctor) { %>
+        <a href="#" class="add-prescription button">Add prescription</a>
+      <% } %>
+    </script>
+
+    <script type="text/html" id="dose-row-template">
+      <td><%= dose.get('prescription').get('medication') %>
+      <% if (dose.get('prescription').get('allergyWarning')) { %>
+        <span class="allergy-warning">(allergy)<span>
+      <% } else if (dose.get('prescription').get('allergyAlert')) {%>
+        <span class="allergy-alert">(allergy)<span>
+      <% } %>
+      </td>
+      <td><%= dose.get('prescription').get('dosage') %></td>
+      <td><%= dose.get('scheduledTime').fromNow() %></td>
+      <td>
+        <a href="#" class="done button">Done</a>
+        <span class="undo">
+          Given
+          <%
+            if (dose.get('givenTime') !== null)
+              print(dose.get('givenTime').fromNow());
+          %>
+          <a href="#" class="undo-link">Undo</a>
+        </span>
+      </td>
+    </script>
+
+    <script type="text/html" id="patient-document-template">
+      <div class="portrait">
+        <img src="images/patients/<%= patient.get('portraitFilename') %>" alt="" />
+      </div>
+      <h2><%= patient.get('name') %></h2>
+      <span class="subtitle"><%= patient.get('age') %>-year-old male</span>
+      <section>
+        <h3><i class="icon-exclamation-sign"></i> Allergies</h3>
+        <ul>
+          <% if (patient.get('importantAllergies').length > 0) { %>
+            <% _.each(patient.get('importantAllergies'), function (allergy) { %>
+              <li class="important">Patient allergic to <%= allergy %></li>
+            <% }) %>
+          <% } else { %>
+            <li class="unimportant">No known allergies to medication</li>
+          <% } %>
+          <% _.each(patient.get('allergies'), function (allergy) { %>
+            <li>Patient mildly allergic to <%= allergy %></li>
+          <% }) %>
+        </ul>
+      </section>
+      <section>
+        <h3><i class="icon-plus-sign-alt"></i> Other Medications</h3>
+        <ul>
+          <% _.each(patient.get('otherMedications'), function (medication) { %>
+            <li><%= medication %></li>
+          <% }) %>
+        </ul>
+      </section>
+      <section>
+        <h3><i class="icon-ambulance"></i> Visit Information</h3>
+        <ul>
+          <% _.each(patient.get('visitInformation'), function (information) { %>
+            <li><%= information %></li>
+          <% }) %>
+        </ul>
+      </section>
+      <section>
+        <h3><i class="icon-book"></i> Patient History</h3>
+        <ul>
+          <% _.each(patient.get('history'), function (historyItem) { %>
+            <li><%= historyItem %></li>
+          <% }) %>
+        </ul>
+      </section>
+      <section>
+        <h3><i class="icon-home"></i> Demographics</h3>
+        <ul class="demographics">
+          <li>
+            <span class="label">Sex</span>
+            <span class="data"><%= patient.get('sex') %></span>
+          </li>
+          <li>
+            <span class="label">Age</span>
+            <span class="data"><%= patient.get('age') %> years</span>
+          </li>
+          <li>
+            <span class="label">Ethnicity</span>
+            <span class="data"><%= patient.get('ethnicity') %></span>
+          </li>
+          <li>
+            <span class="label">Address</span>
+            <span class="data"><%= patient.get('address') %></span>
+          </li>
+        </ul>
+      </section>
+    </script>
+
+    <script src="scripts/application.js"></script>
+  </body>
+</html>
